@@ -26,27 +26,26 @@ public class VehicleService {
     private final VehicleRepository vehicleRepository;
     private final IncidentService incidentService;
     private final WebSocketNotificationService webSocketNotificationService;
+    private final VehicleLocationService vehicleLocationService;
 
     public VehicleService(AssignmentRepository assignmentRepository,
                          VehicleRepository vehicleRepository,
                          IncidentService incidentService,
                          VehicleMapper vehicleMapper,
-                         WebSocketNotificationService webSocketNotificationService) {
+                         WebSocketNotificationService webSocketNotificationService,
+                         VehicleLocationService vehicleLocationService) {
         this.assignmentRepository = assignmentRepository;
         this.vehicleRepository = vehicleRepository;
         this.incidentService = incidentService;
         this.vehicleMapper = vehicleMapper;
         this.webSocketNotificationService = webSocketNotificationService;
+        this.vehicleLocationService = vehicleLocationService;
     }
 
     @Transactional
     public void updateLocation(Integer vehicleId, BigDecimal latitude, BigDecimal longitude) {
-        Vehicle vehicle = vehicleRepository.findById(vehicleId)
-                .orElseThrow(() -> new RuntimeException("Vehicle not found"));
-        vehicle.setLastLatitude(latitude);
-        vehicle.setLastLongitude(longitude);
-        vehicle.setLastUpdatedTime(LocalDateTime.now());
-        vehicleRepository.save(vehicle);
+        // Save to Redis for real-time tracking
+        vehicleLocationService.saveLocationToRedis(vehicleId, latitude, longitude);
 
         if (latitude == null || longitude == null) return;
 
@@ -69,8 +68,11 @@ public class VehicleService {
                         .findByVehicleVehicleIdAndAssignmentStatusNot(vehicleId, "COMPLETED");
 
                 if (remainingAssignments.isEmpty()) {
-                    vehicle.setStatus(VehicleStatus.AVAILABLE);
-                    vehicleRepository.save(vehicle);
+                    Vehicle vehicle = vehicleRepository.findById(vehicleId).orElse(null);
+                    if (vehicle != null) {
+                        vehicle.setStatus(VehicleStatus.AVAILABLE);
+                        vehicleRepository.save(vehicle);
+                    }
                 }
 
                 incidentService.checkIncidentCompletion(incident);

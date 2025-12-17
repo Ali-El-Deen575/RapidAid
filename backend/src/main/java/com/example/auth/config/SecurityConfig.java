@@ -47,6 +47,7 @@ public class SecurityConfig {
                             "/api/assignment/**",
                             "/api/vehicle/**",
                             "/api/user/**",
+                            "/test/**",
                             "/*.html",
                             "/static/**",
                             "/**.js",
