@@ -62,7 +62,7 @@ public class VehicleLocationService {
             }
         }
     }
-}
+
     public void calculateAndStoreRoute(Integer vehicleId, BigDecimal targetLat, BigDecimal targetLng) {
         Vehicle vehicle = vehicleRepository.findById(vehicleId).orElse(null);
         if (vehicle == null || vehicle.getLastLatitude() == null || vehicle.getLastLongitude() == null) {
@@ -150,3 +150,4 @@ public class VehicleLocationService {
             assignmentRepository.save(assignment);
         }
     }
+}
