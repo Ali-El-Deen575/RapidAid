@@ -51,6 +51,9 @@ public class VehicleMovementSimulationService {
     @Autowired
     private VehicleService vehicleService;
 
+    @Autowired
+    private VehicleLocationService vehicleLocationService;
+
     @Scheduled(fixedDelayString = "${vehicle.simulation.update-interval-ms:2000}")
     @Transactional
     public void updateVehicleLocation() {
@@ -115,21 +118,10 @@ public class VehicleMovementSimulationService {
             assignment.setAssignmentStatus(AssignmentStatus.ENROUTE);
             assignment.setAcceptedAt(LocalDateTime.now());
             assignmentRepository.save(assignment);
+            
+            // Calculate and store route for realistic movement
+            vehicleLocationService.calculateAndStoreRoute(vehicle.getVehicleId(), targetLat, targetLng);
         }
-
-        double stepSize = Math.min(stepDistanceKm, distanceKm);
-        double ratio = stepSize / distanceKm;
-
-        double newLat = vehicle.getLastLatitude().doubleValue() +
-                       (targetLat.doubleValue() - vehicle.getLastLatitude().doubleValue()) * ratio;
-        double newLng = vehicle.getLastLongitude().doubleValue() +
-                       (targetLng.doubleValue() - vehicle.getLastLongitude().doubleValue()) * ratio;
-
-        /* Update vehicle location */
-        vehicle.setLastLatitude(BigDecimal.valueOf(newLat));
-        vehicle.setLastLongitude(BigDecimal.valueOf(newLng));
-        vehicle.setLastUpdatedTime(LocalDateTime.now());
-        vehicleRepository.save(vehicle);
     }
 
     private void handleArrival(Assignment assignment, Vehicle vehicle,
