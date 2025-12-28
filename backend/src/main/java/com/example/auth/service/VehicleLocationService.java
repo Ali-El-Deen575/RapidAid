@@ -65,28 +65,34 @@ public class VehicleLocationService {
 
     public void calculateAndStoreRoute(Integer vehicleId, BigDecimal targetLat, BigDecimal targetLng) {
         Vehicle vehicle = vehicleRepository.findById(vehicleId).orElse(null);
-        if (vehicle == null || vehicle.getLastLatitude() == null || vehicle.getLastLongitude() == null) {
+        if (vehicle == null) {
+            System.out.println("Vehicle not found: " + vehicleId);
             return;
+        }
+        
+        // Initialize vehicle location if not set
+        if (vehicle.getLastLatitude() == null || vehicle.getLastLongitude() == null) {
+            vehicle.setLastLatitude(new BigDecimal("30.0626"));
+            vehicle.setLastLongitude(new BigDecimal("31.2497"));
+            vehicleRepository.save(vehicle);
+            System.out.println("Initialized vehicle " + vehicleId + " location");
         }
 
         try {
             RoutingService.RouteResult route = routingService.findRouteForVehicle(vehicle, targetLat, targetLng);
             String routeKey = ROUTE_KEY_PREFIX + vehicleId;
             
-            redisTemplate.opsForHash().put(routeKey, "totalTime", route.getTimeSeconds());
-            redisTemplate.opsForHash().put(routeKey, "totalDistance", route.getDistanceKm());
-            redisTemplate.opsForHash().put(routeKey, "currentIndex", "0");
+            // Store simple route data
+            redisTemplate.opsForHash().put(routeKey, "totalTime", String.valueOf(route.getTimeSeconds()));
             redisTemplate.opsForHash().put(routeKey, "startTime", LocalDateTime.now().toString());
-            redisTemplate.opsForHash().put(routeKey, "pointsSize", String.valueOf(route.getPoints().size()));
+            redisTemplate.opsForHash().put(routeKey, "fromLat", vehicle.getLastLatitude().toString());
+            redisTemplate.opsForHash().put(routeKey, "fromLng", vehicle.getLastLongitude().toString());
+            redisTemplate.opsForHash().put(routeKey, "toLat", targetLat.toString());
+            redisTemplate.opsForHash().put(routeKey, "toLng", targetLng.toString());
             
-            // Store route points individually
-            for (int i = 0; i < route.getPoints().size(); i++) {
-                RoutingService.RoutePoint point = route.getPoints().get(i);
-                redisTemplate.opsForHash().put(routeKey, "point_" + i + "_lat", point.getLatitude().toString());
-                redisTemplate.opsForHash().put(routeKey, "point_" + i + "_lng", point.getLongitude().toString());
-            }
+            System.out.println("Route stored for vehicle " + vehicleId + ", time: " + route.getTimeSeconds() + "s");
         } catch (Exception e) {
-            // Fallback to direct movement if routing fails
+            System.out.println("Route calculation failed: " + e.getMessage());
         }
     }
 
@@ -108,36 +114,44 @@ public class VehicleLocationService {
         
         String startTimeStr = (String) redisTemplate.opsForHash().get(routeKey, "startTime");
         String totalTimeStr = (String) redisTemplate.opsForHash().get(routeKey, "totalTime");
-        String pointsSizeStr = (String) redisTemplate.opsForHash().get(routeKey, "pointsSize");
+        String fromLatStr = (String) redisTemplate.opsForHash().get(routeKey, "fromLat");
+        String fromLngStr = (String) redisTemplate.opsForHash().get(routeKey, "fromLng");
+        String toLatStr = (String) redisTemplate.opsForHash().get(routeKey, "toLat");
+        String toLngStr = (String) redisTemplate.opsForHash().get(routeKey, "toLng");
         
-        if (startTimeStr == null || totalTimeStr == null || pointsSizeStr == null) {
+        if (startTimeStr == null || totalTimeStr == null) {
             return;
         }
 
         LocalDateTime startTime = LocalDateTime.parse(startTimeStr);
         double totalTime = Double.parseDouble(totalTimeStr);
-        int pointsSize = Integer.parseInt(pointsSizeStr);
         
         long elapsedSeconds = java.time.Duration.between(startTime, LocalDateTime.now()).getSeconds();
         
-        // Calculate progress along route
+        // Calculate progress (0.0 to 1.0)
         double progress = Math.min(1.0, elapsedSeconds / totalTime);
-        int targetIndex = (int) (progress * (pointsSize - 1));
         
-        if (targetIndex < pointsSize) {
-            String latStr = (String) redisTemplate.opsForHash().get(routeKey, "point_" + targetIndex + "_lat");
-            String lngStr = (String) redisTemplate.opsForHash().get(routeKey, "point_" + targetIndex + "_lng");
-            
-            if (latStr != null && lngStr != null) {
-                saveLocationToRedis(vehicleId, new BigDecimal(latStr), new BigDecimal(lngStr));
-            }
-            
-            // Check if vehicle reached destination
-            if (targetIndex >= pointsSize - 1) {
-                redisTemplate.delete(routeKey); // Remove completed route
-                handleVehicleArrival(vehicleId);
-            }
+        // Linear interpolation between start and end points
+        double fromLat = Double.parseDouble(fromLatStr);
+        double fromLng = Double.parseDouble(fromLngStr);
+        double toLat = Double.parseDouble(toLatStr);
+        double toLng = Double.parseDouble(toLngStr);
+        
+        double currentLat = fromLat + (toLat - fromLat) * progress;
+        double currentLng = fromLng + (toLng - fromLng) * progress;
+        
+        saveLocationToRedis(vehicleId, BigDecimal.valueOf(currentLat), BigDecimal.valueOf(currentLng));
+        
+        // Check if arrived (progress >= 1.0)
+        if (progress >= 1.0) {
+            redisTemplate.delete(routeKey);
+            handleVehicleArrival(vehicleId);
         }
+    }
+
+    public boolean hasVehicleReachedDestination(Integer vehicleId) {
+        String routeKey = ROUTE_KEY_PREFIX + vehicleId;
+        return !redisTemplate.hasKey(routeKey);
     }
 
     private void handleVehicleArrival(Integer vehicleId) {

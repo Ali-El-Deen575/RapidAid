@@ -4,6 +4,7 @@ import com.example.auth.dto.VehicleRequest;
 import com.example.auth.dto.VehicleResponse;
 import com.example.auth.enums.VehicleStatus;
 import com.example.auth.service.VehicleService;
+import com.example.auth.service.VehicleLocationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -185,4 +186,24 @@ public class VehicleController {
         List<VehicleResponse> vehicles = vehicleService.getVehiclesByStatus(VehicleStatus.AVAILABLE);
         return ResponseEntity.ok(vehicles);
     }
+
+    @Operation(
+            summary = "Calculate route for vehicle",
+            description = "Calculates and stores route for vehicle to target location using GraphHopper."
+    )
+    @PostMapping("/{vehicleId}/calculate-route")
+    public ResponseEntity<String> calculateRoute(
+            @PathVariable Integer vehicleId,
+            @RequestParam BigDecimal targetLat,
+            @RequestParam BigDecimal targetLng) {
+        try {
+            vehicleLocationService.calculateAndStoreRoute(vehicleId, targetLat, targetLng);
+            return ResponseEntity.ok("Route calculated and stored successfully");
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Failed to calculate route: " + e.getMessage());
+        }
+    }
+
+    @Autowired
+    private VehicleLocationService vehicleLocationService;
 }

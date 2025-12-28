@@ -20,20 +20,14 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
-public class VehicleMovementSimulationService {
+public class VehicleAssignmentService {
 
-    private static final Logger logger = LoggerFactory.getLogger(VehicleMovementSimulationService.class);
+    private static final Logger logger = LoggerFactory.getLogger(VehicleAssignmentService.class);
 
-    @Value("${vehicle.simulation.enabled:false}")
-    private boolean simulationEnabled;
+    @Value("${vehicle.assignment.enabled:true}")
+    private boolean assignmentEnabled;
 
-    @Value("${vehicle.simulation.step-distance-km:0.5}")
-    private double stepDistanceKm;
-
-    @Value("${vehicle.simulation.arrival-threshold-km:0.1}")
-    private double arrivalThresholdKm;
-
-    @Value("${vehicle.simulation.service-time-seconds:30}")
+    @Value("${vehicle.assignment.service-time-seconds:30}")
     private int serviceTimeSeconds;
 
     @Autowired
@@ -54,10 +48,10 @@ public class VehicleMovementSimulationService {
     @Autowired
     private VehicleLocationService vehicleLocationService;
 
-    @Scheduled(fixedDelayString = "${vehicle.simulation.update-interval-ms:2000}")
+    @Scheduled(fixedDelayString = "${vehicle.assignment.update-interval-ms:5000}")
     @Transactional
-    public void updateVehicleLocation() {
-        if (!simulationEnabled) return;
+    public void processVehicleAssignments() {
+        if (!assignmentEnabled) return;
 
         List<Assignment> activeAssignments = assignmentRepository
                 .findByAssignmentStatusIn(List.of(
@@ -65,8 +59,6 @@ public class VehicleMovementSimulationService {
                     AssignmentStatus.ENROUTE.name(),
                     AssignmentStatus.ARRIVED.name()
                 ));
-
-        if (activeAssignments.isEmpty()) return;
 
         activeAssignments.forEach(this::processAssignment);
     }
@@ -82,21 +74,16 @@ public class VehicleMovementSimulationService {
 
         if (targetLat == null || targetLng == null) return;
 
-        initializeVehicleLocation(vehicle, targetLat, targetLng);
-
-        double distanceKm = calculateDistanceKm(
-            vehicle.getLastLatitude().doubleValue(),
-            vehicle.getLastLongitude().doubleValue(),
-            targetLat.doubleValue(),
-            targetLng.doubleValue()
-        );
-
-        if (assignment.getAssignmentStatus() == AssignmentStatus.ARRIVED) {
-            handleServiceTime(assignment, vehicle);
-        } else if (distanceKm <= arrivalThresholdKm) {
-            handleArrival(assignment, vehicle, targetLat, targetLng);
-        } else {
-            moveVehicle(assignment, vehicle, targetLat, targetLng, distanceKm);
+        switch (assignment.getAssignmentStatus()) {
+            case ASSIGNED:
+                startRoute(assignment, vehicle, targetLat, targetLng);
+                break;
+            case ENROUTE:
+                checkArrival(assignment, vehicle, targetLat, targetLng);
+                break;
+            case ARRIVED:
+                handleServiceTime(assignment, vehicle);
+                break;
         }
     }
 
@@ -104,28 +91,27 @@ public class VehicleMovementSimulationService {
         return vehicle != null && incident != null && incident.getAddress() != null;
     }
 
-    private void initializeVehicleLocation(Vehicle vehicle, BigDecimal targetLat, BigDecimal targetLng) {
-        if (vehicle.getLastLatitude() == null || vehicle.getLastLongitude() == null) {
-            vehicle.setLastLatitude(targetLat.subtract(BigDecimal.valueOf(0.05)));
-            vehicle.setLastLongitude(targetLng.subtract(BigDecimal.valueOf(0.05)));
-            vehicleRepository.save(vehicle);
+    private void startRoute(Assignment assignment, Vehicle vehicle, BigDecimal targetLat, BigDecimal targetLng) {
+        // Set vehicle as en route
+        assignment.setAssignmentStatus(AssignmentStatus.ENROUTE);
+        assignment.setAcceptedAt(LocalDateTime.now());
+        assignmentRepository.save(assignment);
+
+        // Calculate and start route
+        vehicleLocationService.calculateAndStoreRoute(vehicle.getVehicleId(), targetLat, targetLng);
+        
+        logger.info("Vehicle {} started route to incident {}", vehicle.getVehicleId(), assignment.getIncident().getIncidentId());
+    }
+
+    private void checkArrival(Assignment assignment, Vehicle vehicle, BigDecimal targetLat, BigDecimal targetLng) {
+        // Check if vehicle has reached destination via VehicleLocationService
+        if (vehicleLocationService.hasVehicleReachedDestination(vehicle.getVehicleId())) {
+            handleArrival(assignment, vehicle, targetLat, targetLng);
         }
     }
 
-    private void moveVehicle(Assignment assignment, Vehicle vehicle,
-                            BigDecimal targetLat, BigDecimal targetLng, double distanceKm) {
-        if (assignment.getAssignmentStatus() == AssignmentStatus.ASSIGNED) {
-            assignment.setAssignmentStatus(AssignmentStatus.ENROUTE);
-            assignment.setAcceptedAt(LocalDateTime.now());
-            assignmentRepository.save(assignment);
-            
-            // Calculate and store route for realistic movement
-            vehicleLocationService.calculateAndStoreRoute(vehicle.getVehicleId(), targetLat, targetLng);
-        }
-    }
-
-    private void handleArrival(Assignment assignment, Vehicle vehicle,
-                              BigDecimal targetLat, BigDecimal targetLng) {
+    private void handleArrival(Assignment assignment, Vehicle vehicle, BigDecimal targetLat, BigDecimal targetLng) {
+        // Update vehicle location to exact target
         vehicleLocationService.saveLocationToRedis(vehicle.getVehicleId(), targetLat, targetLng);
 
         assignment.setArrivedAt(LocalDateTime.now());
@@ -143,12 +129,12 @@ public class VehicleMovementSimulationService {
         }
     }
 
-
     private void completeAssignment(Assignment assignment, Vehicle vehicle) {
         assignment.setCompletedAt(LocalDateTime.now());
         assignment.setAssignmentStatus(AssignmentStatus.COMPLETED);
         assignmentRepository.save(assignment);
 
+        // Check if vehicle has other assignments
         List<Assignment> remainingAssignments = assignmentRepository
                 .findByVehicleVehicleIdAndAssignmentStatusNot(vehicle.getVehicleId(), "COMPLETED");
 
@@ -161,19 +147,5 @@ public class VehicleMovementSimulationService {
         incidentService.checkIncidentCompletion(assignment.getIncident());
         List<VehicleResponse> availableVehicles = vehicleService.getAvailableVehicles();
         webSocketNotificationService.notifyAvailableVehicleUpdate(availableVehicles);
-    }
-
-    private double calculateDistanceKm(double lat1, double lng1, double lat2, double lng2) {
-        final int EARTH_RADIUS_KM = 6371;
-
-        double dLat = Math.toRadians(lat2 - lat1);
-        double dLng = Math.toRadians(lng2 - lng1);
-
-        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                   Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
-                   Math.sin(dLng / 2) * Math.sin(dLng / 2);
-
-        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        return EARTH_RADIUS_KM * c;
     }
 }

@@ -44,8 +44,8 @@ public class VehicleService {
 
     @Transactional
     public void updateLocation(Integer vehicleId, BigDecimal latitude, BigDecimal longitude) {
-        // Save to Redis for real-time tracking
-        vehicleLocationService.saveLocationToRedis(vehicleId, latitude, longitude);
+        // Only save to Redis for manual updates, not automatic movement
+        // vehicleLocationService.saveLocationToRedis(vehicleId, latitude, longitude);
 
         if (latitude == null || longitude == null) return;
 

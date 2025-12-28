@@ -40,28 +40,56 @@ public class VehicleLocationTestController {
 
     @GetMapping("/redis/{vehicleId}")
     public ResponseEntity<?> getLocationFromRedis(@PathVariable Integer vehicleId) {
-        String key = "vehicle:location:" + vehicleId;
+        String locationKey = "vehicle:location:" + vehicleId;
+        String routeKey = "vehicle:route:" + vehicleId;
         
-        Map<Object, Object> location = redisTemplate.opsForHash().entries(key);
+        Map<Object, Object> location = redisTemplate.opsForHash().entries(locationKey);
+        Map<Object, Object> route = redisTemplate.opsForHash().entries(routeKey);
         
-        if (location.isEmpty()) {
+        Map<String, Object> response = new HashMap<>();
+        
+        if (!location.isEmpty()) {
+            response.put("location", location);
+        }
+        
+        if (!route.isEmpty()) {
+            response.put("route", route);
+        }
+        
+        if (response.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
         
-        return ResponseEntity.ok(location);
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/redis/all")
     public ResponseEntity<?> getAllLocationsFromRedis() {
-        Set<String> keys = redisTemplate.keys("vehicle:location:*");
-        Map<String, Map<Object, Object>> allLocations = new HashMap<>();
+        Set<String> locationKeys = redisTemplate.keys("vehicle:location:*");
+        Set<String> routeKeys = redisTemplate.keys("vehicle:route:*");
         
-        for (String key : keys) {
+        Map<String, Object> allData = new HashMap<>();
+        
+        // Get all locations
+        for (String key : locationKeys) {
             Map<Object, Object> location = redisTemplate.opsForHash().entries(key);
-            allLocations.put(key, location);
+            allData.put(key, location);
         }
         
-        return ResponseEntity.ok(allLocations);
+        // Get all routes
+        for (String key : routeKeys) {
+            Map<Object, Object> route = redisTemplate.opsForHash().entries(key);
+            allData.put(key, route);
+        }
+        
+        return ResponseEntity.ok(allData);
+    }
+
+    @PostMapping("/start-assignment/{vehicleId}")
+    public ResponseEntity<?> startAssignment(@PathVariable Integer vehicleId) {
+        vehicleLocationService.saveLocationToRedis(vehicleId, new BigDecimal("30.0626"), new BigDecimal("31.2497"));
+        vehicleLocationService.calculateAndStoreRoute(vehicleId, new BigDecimal("30.0444"), new BigDecimal("31.2357"));
+        return ResponseEntity.ok(Map.of("message", "Assignment started for vehicle " + vehicleId));
     }
 
     @PostMapping("/sync")
